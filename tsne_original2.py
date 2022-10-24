@@ -258,7 +258,6 @@ if __name__ == "__main__":
         .format('k_neigh=10')
     sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
     ax.legend(*sc.legend_elements(), title="clusters")
-    plt.title(title_str)
     plt.show()
 
 
