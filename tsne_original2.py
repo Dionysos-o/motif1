@@ -75,13 +75,13 @@ def ld_psai_function(ld_data: np.ndarray, min_dist: float) -> (np.ndarray, np.nd
     return ld_dist_euclidean, ld_dist
 
 
-def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_neigh: int, alpha: float,
+def tsne(x: np.ndarray, min_dist: float, beta: float, a: float, b: float, k_neigh: int, alpha: float,
          no_dims: int = 2, max_iter: int = 1000) -> np.ndarray:
     """
     Runs t-SNE on the dataset in the NxD array x
     to reduce its dimensionality to no_dims dimensions.
     :param x: n x d high dimension data with
-    :param label: n x 1 labels of data
+    :param min_dist: float
     :param beta: the parameter in Gaussian distribution
     :param a: parameter in the family of curves in low dimensional distribution
     :param b: parameter in the family of curves in low dimensional distribution
@@ -117,11 +117,9 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
     # symmetric
 
     # P = search_prob(x, 1e-5, perplexity)
-    dist = cal_pairwise_dist(x)
-    dist = cal_pairwise_dist_sample(dist, k_neigh)
-    h_prob = cal_probability(dist, beta)
-    h_prob + np.transpose(h_prob)
-    h_prob = h_prob / np.sum(h_prob)
+    h_prob = cal_pairwise_dist(x)
+    h_prob = (h_prob + np.transpose(h_prob)) - h_prob * np.transpose(h_prob)
+
     # early exaggeration
     h_prob = h_prob * 4
     h_prob = np.maximum(h_prob, 1e-12)
@@ -130,6 +128,9 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
 
     for iter in range(max_iter):
         # Compute pairwise affinities
+        ld_data = y
+        a, b = fitting_curves(ld_psai_function(ld_data, min_dist))
+
         sum_y = np.sum(np.square(y), 1)
         # num = 1 / (1 + a * np.power(np.maximum(np.add(np.add(-2 * np.dot(y, y.T), sum_y).T, sum_y), 1e-12), b))
         num = 1 / (1 + np.add(np.add(-2 * np.dot(y, y.T), sum_y).T, sum_y))
