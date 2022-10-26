@@ -27,67 +27,16 @@ def cal_pairwise_dist(x: np.ndarray, label: np.ndarray) -> np.ndarray:
     '''
     return dist
 
-
-def cal_pairwise_dist_sample(dist: np.ndarray, k_neighbors: int) -> np.ndarray:
+def hd_distance_umap(dis: np.ndarray, k_neighs: int) -> np.ndarray:
     """
-    calculate the distance from sampling 1-order neighbors
-    :param dist: original pairwise distance matrix for high dimension data
-    :param k_neighbors: number of 1-order neighbors
-    :return: new pairwise distance matrix
+    calculate the distance in high dimensional space in umap
+    every pairwise distance need to be embedded to Gaussian kernel after 1-nearest connection
+    :param dis: n x n distance matrix in Euclidean space
+    :param k_neighs:
+    :return: n x n matrix: ha matrix
     """
-
-    new_dist = np.zeros((len(dist), len(dist)))
-    for i in range(len(dist)):
-        index_order_1 = np.where(dist[i, :] <= 1)[0]
-        for j in range(len(dist)):
-            sum_dist = 0
-            if len(index_order_1) >= k_neighbors:
-                sample_index = random.sample(range(0, len(index_order_1)), k_neighbors)
-                for n in sample_index:
-                    sum_dist = sum_dist + dist[index_order_1[n]][j]
-                new_dist[i][j] = sum_dist / k_neighbors
-            else:
-                new_dist[i][j] = dist[i][j]
-    return new_dist
 
 
-def levenshtein(str1: str, str2: str) -> int:
-    """
-    calculate the levenshtein distance for two strings
-    :param str1: string 1
-    :param str2: string 2
-    :return: levenshtein distance
-    """
-    if str1 == str2:
-        return 0
-    elif len(str1) == 0:
-        return len(str2)
-    elif len(str2) == 0:
-        return len(str1)
-    v0 = [None] * (len(str2) + 1)
-    v1 = [None] * (len(str2) + 1)
-    for i in range(len(v0)):
-        v0[i] = i
-    for i in range(len(str1)):
-        v1[0] = i + 1
-        for j in range(len(str2)):
-            cost = 0 if str1[i] == str2[j] else 1
-            v1[j + 1] = min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost)
-        for j in range(len(v0)):
-            v0[j] = v1[j]
-    return v1[len(t)]
-
-
-def cal_levenshtein(x_str: np.ndarray) -> np.ndarray:
-    """
-    :param x_str: data in string form
-    :return: levenshtein distance matrix
-    """
-    dist = np.zeros((len(x_str), len(x_str)))
-    for i in range(len(x_str)):
-        for j in range(len(x_str)):
-            dist[i][j] = levenshtein(x_str[i], x_str[j])
-    return dist
 
 
 def cal_probability(dist: np.ndarray, beta: float, idx=0) -> np.ndarray:
@@ -122,20 +71,7 @@ def pca(x: np.ndarray, no_dims: int = 50) -> np.ndarray:
     return y
 
 
-def affinity(x: np.array) -> np.ndarray:
-    """
-    Given a set of kmers, calculate everyone's frequency
-    :param x: kmer data
-    :return: frequency label
-    """
-    (n, d) = x.shape
-    lis_x = x.tolist()
-    fre = []
-    for xi in lis_x:
-        fre.append(lis_x.count(xi) / n)
-    fre = np.array(fre)
-    return fre
- 
+
  
 def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_neigh: int, alpha: float, no_dims: int = 2, max_iter: int = 1000) -> np.ndarray:
     """
@@ -174,7 +110,6 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
     dy = np.zeros((n, no_dims))
     iy = np.zeros((n, no_dims))
     gains = np.ones((n, no_dims))
-    fre = affinity(x) * alpha
 
     # symmetric
 
