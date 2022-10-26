@@ -4,9 +4,10 @@ from sklearn.manifold import MDS
 import sim_seq2 as sim
 from matplotlib import pyplot as plt
 import random
+from scipy.optimize import curve_fit
 
 
-def cal_pairwise_dist(x: np.ndarray, label: np.ndarray) -> np.ndarray:
+def cal_pairwise_dist(x: np.ndarray) -> np.ndarray:
     """
     calculate pairwise distance for data by using (a-b)^2 = a^w + b^2 - 2*a*b
     :param x: data matrix
@@ -15,65 +16,67 @@ def cal_pairwise_dist(x: np.ndarray, label: np.ndarray) -> np.ndarray:
     """
     sum_x = np.sum(np.square(x), 1)
     dist = np.add(np.add(-2 * np.dot(x, x.T), sum_x).T, sum_x)
-    '''
-    for i in range(len(x)):
-        if label[i] % 2 == 1:
-            pass
-            dist[i, np.where(label-label[i] == 0)[0]] = 1
-        if label[i] == 6:
-            pass
-            dist[i, np.where(label - label[i] != 0)[0]] = 100
-            #dist[i, np.where(label - label[i] == 0)[0]] = 1
-    '''
     return dist
 
-def hd_distance_umap(dis: np.ndarray, k_neighs: int) -> np.ndarray:
+
+def hd_distance_umap(hd_data: np.ndarray, beta: float) -> np.ndarray:
     """
     calculate the distance in high dimensional space in umap
     every pairwise distance need to be embedded to Gaussian kernel after 1-nearest connection
-    :param dis: n x n distance matrix in Euclidean space
-    :param k_neighs:
-    :return: n x n matrix: ha matrix
+    :param hd_data: hd data
+    :param beta: hyperparameter in Gaussian kernel
+    :return: n x n matrix: hd distance matrix
+    """
+    hd_dist = np.sqrt(cal_pairwise_dist(hd_data))
+
+    for i in range(len(hd_data)):
+        hd_dist[i, :] = np.maximum(hd_dist[i, :] - np.min(hd_dist[i, hd_dist[i, :]]), 0)
+        hd_dist[i, :] = np.exp(-hd_dist / beta)
+
+    return hd_dist
+
+
+def func(x, a, b):
+    """
+    define the function for curve fit
+    :param x: input data
+    :param a: parameter1
+    :param b: parameter2
+    :return: the prediction values
+    """
+    return 1 / (1 + a * np.power((x, 2 * b)))
+
+
+def fitting_curves(ld_dist_euclidean: np.ndarray, ld_dist: np.ndarray) -> (float, float):
     """
 
-
-
-
-def cal_probability(dist: np.ndarray, beta: float, idx=0) -> np.ndarray:
+    :param ld_dist_euclidean: n^2 x 1 matrix
+    :param ld_dist: n^2 x 1 matrix
+    :return:a,b fot low dimensional distribution
     """
-    calculate Gaussian probability for each point based on the distance matrix
-    :param dist: n x n distance matrix
-    :param beta: parameter in gaussian distribution to control the variance
-    :param idx:
-    :return: n x n matrix
+    y = func(ld_dist_euclidean, 1., 1.)
+    para = curve_fit(func, ld_dist_euclidean, ld_dist)
+    return para[0][0], para[0][0]
+
+
+def ld_psai_function(ld_data: np.ndarray, min_dist: float) -> (np.ndarray, np.ndarray):
     """
-
-    prob = np.exp(-dist * beta)
-    # set the
-    prob[idx] = 0.0
-    sum_prob = np.sum(prob)
-    prob /= sum_prob
-    return prob
-
-
-def pca(x: np.ndarray, no_dims: int = 50) -> np.ndarray:
+    :param ld_data: n x 2 matrix low dimensional data
+    :param min_dist: hyperparameter to control the tightness of cluster
+    :return:ld_dist_euclidean, ld_dist , n^2 x 1 matrix after psai function
     """
-    initialize data with PCA if needed
-    :param x: n x d high dimension data with
-    :param no_dims: convert data to this dimension
-    :return: n x no_dims processed data for tsne
-    """
-    print("Preprocessing the data using PCA...")
-    (n, d) = x.shape
-    x = x - np.tile(np.mean(x, 0), (n, 1))
-    l, m = np.linalg.eig(np.dot(x.T, x))
-    y = np.dot(x, m[:, 0: no_dims])
-    return y
+    ld_dist_euclidean = np.reshape(np.sqrt(cal_pairwise_dist(ld_data)))
+    ld_dist = ld_dist_euclidean
+    for i in range(len(ld_dist_euclidean)):
+        if ld_dist_euclidean[i] <= min_dist:
+            ld_dist[i] = 1
+        else:
+            ld_dist[i] = np.exp(-ld_dist_euclidean[i] - min_dist)
+    return ld_dist_euclidean, ld_dist
 
 
-
- 
-def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_neigh: int, alpha: float, no_dims: int = 2, max_iter: int = 1000) -> np.ndarray:
+def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_neigh: int, alpha: float,
+         no_dims: int = 2, max_iter: int = 1000) -> np.ndarray:
     """
     Runs t-SNE on the dataset in the NxD array x
     to reduce its dimensionality to no_dims dimensions.
@@ -87,7 +90,7 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
     :param max_iter: number of steps of iteration
     :return: n x no_dims  low dimensional data
     """
- 
+
     # Check inputs
     if isinstance(no_dims, float):
         print("Error: array x should have type float.")
@@ -95,7 +98,7 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
     if round(no_dims) != no_dims:
         print("Error: number of dimensions should be an integer.")
         return -1
- 
+
     # initialize parameters
 
     # x = pca(x, initial_dims).real
@@ -114,7 +117,7 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
     # symmetric
 
     # P = search_prob(x, 1e-5, perplexity)
-    dist = cal_pairwise_dist(x, label)
+    dist = cal_pairwise_dist(x)
     dist = cal_pairwise_dist_sample(dist, k_neigh)
     h_prob = cal_probability(dist, beta)
     h_prob + np.transpose(h_prob)
@@ -122,7 +125,7 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
     # early exaggeration
     h_prob = h_prob * 4
     h_prob = np.maximum(h_prob, 1e-12)
- 
+
     # Run iterations
 
     for iter in range(max_iter):
@@ -133,22 +136,21 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
         num[range(n), range(n)] = 0
         l_prob = num / np.sum(num)
         l_prob = np.maximum(l_prob, 1e-12)
- 
+
         # Compute gradient
 
         diff_prob = h_prob - l_prob
         times_prob = h_prob * l_prob
         diff_times_prob = h_prob - times_prob
         for i in range(n):
+            # dy[i, :] = 2 * a * b * np.sum(np.tile(diff_times_prob[:, i] * num[:, i] * (fre[i] + fre), (no_dims, 1)).T * (y[i, :] - y), 0)
 
-            #dy[i, :] = 2 * a * b * np.sum(np.tile(diff_times_prob[:, i] * num[:, i] * (fre[i] + fre), (no_dims, 1)).T * (y[i, :] - y), 0)
-
-            #dy[i, :] = 2 * a * b * np.sum(np.tile(diff_prob[:, i] * num[:, i] * (fre[i] + fre), (no_dims, 1)).T * (y[i, :] - y), 0)
-            #test_y = y[i, :] - y
-            #test_y = np.where(test_y == 0, 1e-12, test_y)  # notation needs change
-            #test_y_sub = np.power(test_y+0j, 2 * b-1)
-            #final_y = np.where(test_y == 0, test_y, test_y_sub)
-            #dy[i, :] = 2 * a * b*np.sum(np.tile(diff_prob[:, i] * num[:, i], (no_dims, 1)).T * final_y, 0)
+            # dy[i, :] = 2 * a * b * np.sum(np.tile(diff_prob[:, i] * num[:, i] * (fre[i] + fre), (no_dims, 1)).T * (y[i, :] - y), 0)
+            # test_y = y[i, :] - y
+            # test_y = np.where(test_y == 0, 1e-12, test_y)  # notation needs change
+            # test_y_sub = np.power(test_y+0j, 2 * b-1)
+            # final_y = np.where(test_y == 0, test_y, test_y_sub)
+            # dy[i, :] = 2 * a * b*np.sum(np.tile(diff_prob[:, i] * num[:, i], (no_dims, 1)).T * final_y, 0)
 
             dy[i, :] = np.sum(np.tile(diff_prob[:, i] * num[:, i], (no_dims, 1)).T * (y[i, :] - y), 0)
 
@@ -179,8 +181,8 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
             h_prob = h_prob / 4
     print("finished training!")
     return y
- 
- 
+
+
 if __name__ == "__main__":
     # Run Y = tsne.tsne(X, no_dims, perplexity) to perform t-SNE on your dataset.
     # X = np.loadtxt("mnist2500_X.txt")
@@ -194,9 +196,6 @@ if __name__ == "__main__":
     sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
     ax.legend(*sc.legend_elements(), title="clusters")
     plt.show()
-
-
-
 
     '''
     alpha_set = np.linspace(1, 2.5, 50)
