@@ -5,6 +5,7 @@ import sim_seq2 as sim
 from matplotlib import pyplot as plt
 import random
 import scipy
+import os
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.manifold import SpectralEmbedding
 
@@ -150,7 +151,7 @@ def ce(p: np.ndarray, ld_data: np.ndarray, a: float, b: float) -> float:
 
 
 def umap(x: np.ndarray, labels: np.ndarray, min_dist: float,  k_neigh: int,
-         no_dims: int = 2, max_iter: int = 1000) -> np.ndarray:
+         no_dims: int = 2, max_iter: int = 100) -> np.ndarray:
     """
     Runs umap on the dataset in the NxD array x
     to reduce its dimensionality to no_dims dimensions.
@@ -175,6 +176,9 @@ def umap(x: np.ndarray, labels: np.ndarray, min_dist: float,  k_neigh: int,
 
     # initialize parameters
     # x = pca(x, initial_dims).real
+    path = 'figure/umap/min_dist = ' + str(min_dist) + ' k_neigh = ' + str(k_neigh)
+    if not os.path.exists(path):
+        os.makedirs(path)
     n = x.shape[0]
     learning_rate = 1
 
@@ -200,13 +204,19 @@ def umap(x: np.ndarray, labels: np.ndarray, min_dist: float,  k_neigh: int,
         if i % 10 == 0:
             plt.figure(figsize=(20, 15))
             plt.scatter(y[:, 0], y[:, 1], c=labels.astype(int), cmap='tab10', s=50)
-            plt.title("UMAP on Cancer Associated Fibroblasts (CAFs): Programmed from Scratch",
+            plt.title("UMAP dimensional reduction for 3motif with random min_dist={}, k={}".format(str(min_dist), str(k_neigh)),
                       fontsize=20)
             plt.xlabel("UMAP1", fontsize=20)
             plt.ylabel("UMAP2", fontsize=20)
-            plt.savefig('figure/UMAP_iter_' + str(i) + '.png')
+            plt.savefig(path + '/UMAP_iter' + str(i) + '.png')
             plt.close()
             print("Cross-Entropy = " + str(ce_current) + " after " + str(i) + " iterations")
+    plt.figure(figsize=(20,15))
+    plt.plot(ce_array)
+    plt.title('cross-entropy', fontsize=20)
+    plt.xlabel('ITERATION', fontsize=20)
+    plt.ylabel("CROSS-ENTROPY", fontsize=20)
+    plt.savefig(path + '/UMAP_iter' + '_Final' + '.png')
     return y
 
 
@@ -217,6 +227,10 @@ if __name__ == "__main__":
     data, label1, label2 = sim.simulation_run_1()
     X = data.numpy()
     label = label2.numpy()
-    Y = umap(X, label, 0.1, 8)
+    para_min_dist = np.linspace(0.1, 0.99, 10)
+    para_k = np.linspace(1, 15, 15).astype(int)
+    for min_dist_i in para_min_dist:
+        for k_i in para_k:
+            umap(X, label, min_dist_i, k_i)
 
 
