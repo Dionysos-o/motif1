@@ -6,6 +6,7 @@ from matplotlib import pyplot as plt
 import random
 import scipy
 import os
+import torch
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.manifold import SpectralEmbedding
 
@@ -22,6 +23,39 @@ def cal_pairwise_dist(x: np.ndarray) -> np.ndarray:
 
     dist = np.abs(dist)  # float calculation may causes negative values
     return dist
+
+
+def fit_curves(y_dist: np.ndarray, psi_values: np.ndarray) -> (float, float):
+    """
+    using a,b t-curves to fit psi_values of y
+    :param y_dist: n^2 x 1 euclidean distance of y
+    :param psi_values: n^2 x 1 psi_value of y_dist
+    :return: a, b
+    """
+    y_dist = torch.from_numpy(y_dist)
+    psi_values = torch.from_numpy(psi_values)
+
+    # initialize the parameters
+    a = torch.tensor(2., requires_grad=True)
+    b = torch.tensor(1., requires_grad=True)
+    max_iter = 10000
+    learning_rate = 0.001
+
+    # calculate loss and auto  cal gradient
+    for i in range(max_iter):
+        y_curve = 1 / (1 + a * torch.pow(y_dist, 2*b))
+        loss = (y_curve - psi_values).pow(2).sum()
+        loss.backward()
+        with torch.no_grad():
+            a -= learning_rate * a.grad
+            b -= learning_rate * b.grad
+            torch.clamp_(a, min=torch.tensor(1.), max=torch.tensor(2.))
+            torch.clamp_(b, min=torch.tensor(0.001), max=torch.tensor(1.))
+            a.grad = None
+            b.grad = None
+    para_1 = a.detach().numpy()
+    para_2 = b.detach().numpy()
+    return para_1, para_2
 
 
 def hd_distance_umap(hd_data: np.ndarray, beta: float) -> np.ndarray:
@@ -52,11 +86,11 @@ def func(x, a, b):
     return 1 / (1 + a * np.power(x, 2*b))
 
 
-def ld_psai_function(ld_data: np.ndarray, min_dist: float) -> list:
+def ld_psi_function(ld_data: np.ndarray, min_dist: float) -> list:
     """
     :param ld_data: n x 2 matrix low dimensional data
     :param min_dist: hyperparameter to control the tightness of cluster
-    :return:ld_dist_euclidean, ld_dist , n^2 x 1 matrix after psai function
+    :return:ld_dist_euclidean, ld_dist , n^2 x 1 matrix after psi function
     """
     ld_dist = []
     for i in range(len(ld_data)):
@@ -188,19 +222,21 @@ def umap(x: np.ndarray, labels: np.ndarray, min_dist: float,  k_neigh: int,
     h_prob = (h_prob + np.transpose(h_prob)) / 2
 
     # low dimensional distribution
-    test_x = np.linspace(0, 3, 300)
-    para = scipy.optimize.curve_fit(func, test_x, ld_psai_function(test_x, min_dist))
-    a = para[0][0]
-    b = para[0][1]
     model = SpectralEmbedding(n_components=no_dims, n_neighbors=50)
     y = model.fit_transform(np.log(x + 1))
 
     # Run iterations
     ce_array = []
     for i in range(max_iter):
+        y_dist = np.reshape(euclidean_distances(y, y), -1)
+        psi_value = np.array(ld_psi_function(y_dist, min_dist))
+        print(3)
+        a, b = fit_curves(y_dist, psi_value)
+        print(a, b)
         y = y - learning_rate * ce_gradient(h_prob, y, a, b)
         ce_current = np.sum(ce(h_prob, y, a, b)) / 1e+5
         ce_array.append(ce_current)
+        print(i)
         if i % 10 == 0:
             plt.figure(figsize=(20, 15))
             plt.scatter(y[:, 0], y[:, 1], c=labels.astype(int), cmap='tab10', s=50)
@@ -224,13 +260,12 @@ if __name__ == "__main__":
     # Run Y = tsne.tsne(X, no_dims, perplexity) to perform t-SNE on your dataset.
     # X = np.loadtxt("mnist2500_X.txt")
     # labels = np.loadtxt("mnist2500_labels.txt")
+
     data, label1, label2 = sim.simulation_run_1()
     X = data.numpy()
     label = label2.numpy()
     para_min_dist = np.linspace(0.1, 0.99, 10)
     para_k = np.linspace(1, 15, 15).astype(int)
-    for min_dist_i in para_min_dist:
-        for k_i in para_k:
-            umap(X, label, min_dist_i, k_i)
+    umap(X, label, 0.01, 8)
 
 
