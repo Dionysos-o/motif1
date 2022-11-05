@@ -4,6 +4,9 @@ from sklearn.manifold import MDS
 import sim_seq2 as sim
 from matplotlib import pyplot as plt
 import random
+from matplotlib import cm
+from matplotlib import axes
+from matplotlib.font_manager import FontProperties
 
 
 def cal_pairwise_dist(x: np.ndarray, label: np.ndarray) -> np.ndarray:
@@ -15,6 +18,7 @@ def cal_pairwise_dist(x: np.ndarray, label: np.ndarray) -> np.ndarray:
     """
     sum_x = np.sum(np.square(x), 1)
     dist = np.add(np.add(-2 * np.dot(x, x.T), sum_x).T, sum_x)
+    dist = dist / 2
     '''
     for i in range(len(x)):
         if label[i] % 2 == 1:
@@ -98,7 +102,7 @@ def cal_probability(dist: np.ndarray, beta: float, idx=0) -> np.ndarray:
     :param idx:
     :return: n x n matrix
     """
-
+    dist = dist ** 2
     prob = np.exp(-dist * beta)
     # set the
     prob[idx] = 0.0
@@ -180,7 +184,17 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
 
     # P = search_prob(x, 1e-5, perplexity)
     dist = cal_pairwise_dist(x, label)
+
     dist = cal_pairwise_dist_sample(dist, k_neigh)
+    '''
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    im = ax.imshow(dist, cmap=plt.cm.hot_r)
+    # 增加右侧的颜色刻度条
+    plt.colorbar(im)
+    plt.title('Hot figure of distance matrix')
+    plt.show()
+    '''
     h_prob = cal_probability(dist, beta)
     h_prob + np.transpose(h_prob)
     h_prob = h_prob / np.sum(h_prob)
@@ -252,16 +266,14 @@ if __name__ == "__main__":
     # labels = np.loadtxt("mnist2500_labels.txt")
     data, label1, label2 = sim.simulation_run_1()
     X = data.numpy()
-    Y = tsne(X, label1, 1 / 2, 1.987, 0.98, k_neigh=2, alpha=3.0)
+    Y = tsne(X, label1, 1 / 2, 1.987, 0.98, k_neigh=20, alpha=3.0)
     fig, ax = plt.subplots()
-    title_str = 'Tsne dimensional reduction for 3motif with random{}' \
-        .format('k_neigh=10')
+    title_str = 'Tsne dimensional reduction for 3motif with random sample 20'
     sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
-    ax.legend(*sc.legend_elements(), title="clusters")
+    ax.legend(*sc.legend_elements(), title="clusters", loc='lower left')
     plt.title(title_str)
     plt.show()
-
-
+    plt.savefig("./figure/Tsne dimensional reduction for 3motif with random sample 20.png")
 
 
     '''
