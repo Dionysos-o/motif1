@@ -4,146 +4,194 @@ from sklearn.manifold import MDS
 import sim_seq2 as sim
 from matplotlib import pyplot as plt
 import random
+import scipy
+import os
+import torch
+from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.manifold import SpectralEmbedding
 
 
-def cal_pairwise_dist(x: np.ndarray, label: np.ndarray) -> np.ndarray:
+def cal_pairwise_dist(x: np.ndarray) -> np.ndarray:
     """
-    calculate pairwise distance for data by using (a-b)^2 = a^w + b^2 - 2*a*b
+    calculate pairwise distance for data by using (a-b)^2 = a^2 + b^2 - 2*a*b
     :param x: data matrix
     :param label: label of data
     :return: pairwise distance matrix of data x
     """
     sum_x = np.sum(np.square(x), 1)
     dist = np.add(np.add(-2 * np.dot(x, x.T), sum_x).T, sum_x)
-    '''
-    for i in range(len(x)):
-        if label[i] % 2 == 1:
-            pass
-            dist[i, np.where(label-label[i] == 0)[0]] = 1
-        if label[i] == 6:
-            pass
-            dist[i, np.where(label - label[i] != 0)[0]] = 100
-            #dist[i, np.where(label - label[i] == 0)[0]] = 1
-    '''
+
+    dist = np.abs(dist)  # float calculation may causes negative values
     return dist
 
 
-def cal_pairwise_dist_sample(dist: np.ndarray, k_neighbors: int) -> np.ndarray:
+def fit_curves(y_dist: np.ndarray, psi_values: np.ndarray) -> (float, float):
     """
-    calculate the distance from sampling 1-order neighbors
-    :param dist: original pairwise distance matrix for high dimension data
-    :param k_neighbors: number of 1-order neighbors
-    :return: new pairwise distance matrix
+    using a,b t-curves to fit psi_values of y
+    :param y_dist: n^2 x 1 euclidean distance of y
+    :param psi_values: n^2 x 1 psi_value of y_dist
+    :return: a, b
     """
+    y_dist = torch.from_numpy(y_dist)
+    psi_values = torch.from_numpy(psi_values)
 
-    new_dist = np.zeros((len(dist), len(dist)))
-    for i in range(len(dist)):
-        index_order_1 = np.where(dist[i, :] <= 1)[0]
-        for j in range(len(dist)):
-            sum_dist = 0
-            if len(index_order_1) >= k_neighbors:
-                sample_index = random.sample(range(0, len(index_order_1)), k_neighbors)
-                for n in sample_index:
-                    sum_dist = sum_dist + dist[index_order_1[n]][j]
-                new_dist[i][j] = sum_dist / k_neighbors
-            else:
-                new_dist[i][j] = dist[i][j]
-    return new_dist
+    # initialize the parameters
+    a = torch.tensor(2., requires_grad=True)
+    b = torch.tensor(1., requires_grad=True)
+    max_iter = 10000
+    learning_rate = 0.001
 
-
-def levenshtein(str1: str, str2: str) -> int:
-    """
-    calculate the levenshtein distance for two strings
-    :param str1: string 1
-    :param str2: string 2
-    :return: levenshtein distance
-    """
-    if str1 == str2:
-        return 0
-    elif len(str1) == 0:
-        return len(str2)
-    elif len(str2) == 0:
-        return len(str1)
-    v0 = [None] * (len(str2) + 1)
-    v1 = [None] * (len(str2) + 1)
-    for i in range(len(v0)):
-        v0[i] = i
-    for i in range(len(str1)):
-        v1[0] = i + 1
-        for j in range(len(str2)):
-            cost = 0 if str1[i] == str2[j] else 1
-            v1[j + 1] = min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost)
-        for j in range(len(v0)):
-            v0[j] = v1[j]
-    return v1[len(t)]
+    # calculate loss and auto  cal gradient
+    for i in range(max_iter):
+        y_curve = 1 / (1 + a * torch.pow(y_dist, 2*b))
+        loss = (y_curve - psi_values).pow(2).sum()
+        loss.backward()
+        with torch.no_grad():
+            a -= learning_rate * a.grad
+            b -= learning_rate * b.grad
+            torch.clamp_(a, min=torch.tensor(1.), max=torch.tensor(2.))
+            torch.clamp_(b, min=torch.tensor(0.001), max=torch.tensor(1.))
+            a.grad = None
+            b.grad = None
+    para_1 = a.detach().numpy()
+    para_2 = b.detach().numpy()
+    return para_1, para_2
 
 
-def cal_levenshtein(x_str: np.ndarray) -> np.ndarray:
+def hd_distance_umap(hd_data: np.ndarray, beta: float) -> np.ndarray:
     """
-    :param x_str: data in string form
-    :return: levenshtein distance matrix
+    calculate the distance in high dimensional space in umap
+    every pairwise distance need to be embedded to Gaussian kernel after 1-nearest connection
+    :param hd_data: hd data
+    :param beta: hyperparameter in Gaussian kernel
+    :return: n x n matrix: hd distance matrix
     """
-    dist = np.zeros((len(x_str), len(x_str)))
-    for i in range(len(x_str)):
-        for j in range(len(x_str)):
-            dist[i][j] = levenshtein(x_str[i], x_str[j])
-    return dist
+    hd_dist = np.sqrt(cal_pairwise_dist(hd_data))
+
+    for i in range(len(hd_data)):
+        hd_dist[i, :] = np.maximum(hd_dist[i, :] - np.min(hd_dist[i, hd_dist[i, :].nonzero()[0]]), 0)
+        hd_dist[i, :] = np.exp(-hd_dist[i, :] / beta)
+
+    return hd_dist
 
 
-def cal_probability(dist: np.ndarray, beta: float, idx=0) -> np.ndarray:
+def func(x, a, b):
     """
-    calculate Gaussian probability for each point based on the distance matrix
-    :param dist: n x n distance matrix
-    :param beta: parameter in gaussian distribution to control the variance
-    :param idx:
-    :return: n x n matrix
+    define the function for curve fit
+    :param x: input data
+    :param a: parameter1
+    :param b: parameter2
+    :return: the prediction values
     """
-
-    prob = np.exp(-dist * beta)
-    # set the
-    prob[idx] = 0.0
-    sum_prob = np.sum(prob)
-    prob /= sum_prob
-    return prob
+    return 1 / (1 + a * np.power(x, 2*b))
 
 
-def pca(x: np.ndarray, no_dims: int = 50) -> np.ndarray:
+def ld_psi_function(ld_data: np.ndarray, min_dist: float) -> list:
     """
-    initialize data with PCA if needed
-    :param x: n x d high dimension data with
-    :param no_dims: convert data to this dimension
-    :return: n x no_dims processed data for tsne
+    :param ld_data: n x 2 matrix low dimensional data
+    :param min_dist: hyperparameter to control the tightness of cluster
+    :return:ld_dist_euclidean, ld_dist , n^2 x 1 matrix after psi function
     """
-    print("Preprocessing the data using PCA...")
-    (n, d) = x.shape
-    x = x - np.tile(np.mean(x, 0), (n, 1))
-    l, m = np.linalg.eig(np.dot(x.T, x))
-    y = np.dot(x, m[:, 0: no_dims])
-    return y
+    ld_dist = []
+    for i in range(len(ld_data)):
+        if ld_data[i] <= min_dist:
+            ld_dist.append(1)
+        else:
+            ld_dist.append(np.exp(-ld_data[i] - min_dist))
+    return ld_dist
 
 
-def affinity(x: np.array) -> np.ndarray:
+def cal_hd_prob_row(dist_row: np.ndarray, rho_i:float, sigma: float) -> np.ndarray:
     """
-    Given a set of kmers, calculate everyone's frequency
-    :param x: kmer data
-    :return: frequency label
+    For each row of Euclidean distance matrix (dist_row) compute
+    probability in high dimensions (1D array)
+    :param dist_row:
+    :param rho_i:
+    :param sigma:
+    :return:
     """
-    (n, d) = x.shape
-    lis_x = x.tolist()
-    fre = []
-    for xi in lis_x:
-        fre.append(lis_x.count(xi) / n)
-    fre = np.array(fre)
-    return fre
- 
- 
-def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_neigh: int, alpha: float, no_dims: int = 2, max_iter: int = 1000) -> np.ndarray:
+    d = dist_row - rho_i
+    d[d < 0] = 0
+    return np.exp(- d / sigma)
+
+
+def sigma_binary_search(row: np.ndarray, rho_i: float, k_neighbors: int) -> float:
     """
-    Runs t-SNE on the dataset in the NxD array x
+    Solve equation k_of_sigma(sigma) = fixed_k
+    with respect to sigma by the binary search algorithm
+    :param row:
+    :param rho_i:
+    :param k_neighbors:
+    :return:
+    """
+    sigma_lower_limit = 0
+    sigma_upper_limit = 1000
+    approx_sigma = (sigma_lower_limit + sigma_upper_limit) / 2
+    for i in range(20):
+        approx_sigma = (sigma_lower_limit + sigma_upper_limit) / 2
+        entropy = np.power(2, np.sum(cal_hd_prob_row(row, rho_i, approx_sigma)))
+        if entropy < k_neighbors:
+            sigma_lower_limit = approx_sigma
+        else:
+            sigma_upper_limit = approx_sigma
+        if np.abs(k_neighbors - entropy) <= 1e-5:
+            break
+    return approx_sigma
+
+
+def cal_hd_prob(hd_data: np.ndarray, k_neighbors: int) -> np.ndarray:
+    """
+    :param hd_data:
+    :param k_neighbors:
+    :return:
+    """
+    n = len(hd_data)
+    dist = np.square(euclidean_distances(hd_data, hd_data))
+    rho = [sorted(dist[i])[1] for i in range(dist.shape[0])]
+    hd_prob = np.zeros((n, n))
+    for row_index in range(n):
+        sigma = sigma_binary_search(dist[row_index], rho[row_index], k_neighbors)
+        hd_prob[row_index] = cal_hd_prob_row(dist[row_index], rho[row_index], sigma)
+    return hd_prob
+
+
+def ce_gradient(p: np.ndarray, ld_data: np.ndarray, a: float, b: float) -> np.ndarray:
+    """
+    :param p:
+    :param ld_data:
+    :param a:
+    :param b:
+    :return:
+    """
+    ld_data_diff = np.expand_dims(ld_data, 1) - np.expand_dims(ld_data, 0)
+    inv_dist = np.power(1 + a * np.square(euclidean_distances(ld_data, ld_data)) ** b, -1)
+    Q = np.dot(1 - p, np.power(0.001 + np.square(euclidean_distances(ld_data, ld_data)), -1))
+    np.fill_diagonal(Q, 0)
+    Q = Q / np.sum(Q, axis=1, keepdims=True)
+    fact = np.expand_dims(a * p * (1e-8 + np.square(euclidean_distances(ld_data, ld_data))) ** (b - 1) - Q, 2)
+    return 2 * b * np.sum(fact * ld_data_diff * np.expand_dims(inv_dist, 2), axis=1)
+
+
+def ce(p: np.ndarray, ld_data: np.ndarray, a: float, b: float) -> float:
+    """
+    :param p:
+    :param ld_data:
+    :param a:
+    :param b:
+    :return:
+    """
+    Q = np.power(1 + a * np.square(euclidean_distances(ld_data, ld_data))**b, -1)
+    return - p * np.log(Q + 0.01) - (1 - p) * np.log(1 - Q + 0.01)
+
+
+def umap(x: np.ndarray, labels: np.ndarray, min_dist: float,  k_neigh: int,
+         no_dims: int = 2, max_iter: int = 100) -> np.ndarray:
+    """
+    Runs umap on the dataset in the NxD array x
     to reduce its dimensionality to no_dims dimensions.
     :param x: n x d high dimension data with
-    :param label: n x 1 labels of data
-    :param beta: the parameter in Gaussian distribution
+    :param labels: n x 1 the label of high dimensional data
+    :param min_dist: float
     :param a: parameter in the family of curves in low dimensional distribution
     :param b: parameter in the family of curves in low dimensional distribution
     :param k_neigh: number of sampling neighbors
@@ -151,7 +199,7 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
     :param max_iter: number of steps of iteration
     :return: n x no_dims  low dimensional data
     """
- 
+
     # Check inputs
     if isinstance(no_dims, float):
         print("Error: array x should have type float.")
@@ -159,170 +207,65 @@ def tsne(x: np.ndarray, label: np.ndarray, beta: float, a: float, b: float, k_ne
     if round(no_dims) != no_dims:
         print("Error: number of dimensions should be an integer.")
         return -1
- 
+
     # initialize parameters
-
     # x = pca(x, initial_dims).real
-    n = len(x)
-    initial_momentum = 0.5
-    final_momentum = 0.8
-    eta = 500
-    min_gain = 10
-    bound = 1000
-    y = np.random.randn(n, no_dims)
-    # y = np.random.rand(n, 2) * 2 * bound - bound
-    dy = np.zeros((n, no_dims))
-    iy = np.zeros((n, no_dims))
-    gains = np.ones((n, no_dims))
-    fre = affinity(x) * alpha
+    path = 'figure/umap/min_dist = ' + str(min_dist) + ' k_neigh = ' + str(k_neigh)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    n = x.shape[0]
+    learning_rate = 1
 
-    # symmetric
+    # high dimensional distribution
 
-    # P = search_prob(x, 1e-5, perplexity)
-    dist = cal_pairwise_dist(x, label)
-    dist = cal_pairwise_dist_sample(dist, k_neigh)
-    h_prob = cal_probability(dist, beta)
-    h_prob + np.transpose(h_prob)
-    h_prob = h_prob / np.sum(h_prob)
-    # early exaggeration
-    h_prob = h_prob * 4
-    h_prob = np.maximum(h_prob, 1e-12)
- 
+    h_prob = cal_hd_prob(x, k_neigh)
+    h_prob = (h_prob + np.transpose(h_prob)) / 2
+
+    # low dimensional distribution
+    model = SpectralEmbedding(n_components=no_dims, n_neighbors=50)
+    y = model.fit_transform(np.log(x + 1))
+
     # Run iterations
-
-    for iter in range(max_iter):
-        # Compute pairwise affinities
-        sum_y = np.sum(np.square(y), 1)
-        # num = 1 / (1 + a * np.power(np.maximum(np.add(np.add(-2 * np.dot(y, y.T), sum_y).T, sum_y), 1e-12), b))
-        num = 1 / (1 + np.add(np.add(-2 * np.dot(y, y.T), sum_y).T, sum_y))
-        num[range(n), range(n)] = 0
-        l_prob = num / np.sum(num)
-        l_prob = np.maximum(l_prob, 1e-12)
- 
-        # Compute gradient
-
-        diff_prob = h_prob - l_prob
-        times_prob = h_prob * l_prob
-        diff_times_prob = h_prob - times_prob
-        for i in range(n):
-
-            #dy[i, :] = 2 * a * b * np.sum(np.tile(diff_times_prob[:, i] * num[:, i] * (fre[i] + fre), (no_dims, 1)).T * (y[i, :] - y), 0)
-
-            #dy[i, :] = 2 * a * b * np.sum(np.tile(diff_prob[:, i] * num[:, i] * (fre[i] + fre), (no_dims, 1)).T * (y[i, :] - y), 0)
-            #test_y = y[i, :] - y
-            #test_y = np.where(test_y == 0, 1e-12, test_y)  # notation needs change
-            #test_y_sub = np.power(test_y+0j, 2 * b-1)
-            #final_y = np.where(test_y == 0, test_y, test_y_sub)
-            #dy[i, :] = 2 * a * b*np.sum(np.tile(diff_prob[:, i] * num[:, i], (no_dims, 1)).T * final_y, 0)
-
-            dy[i, :] = np.sum(np.tile(diff_prob[:, i] * num[:, i], (no_dims, 1)).T * (y[i, :] - y), 0)
-
-        # Perform the update
-        if iter < 20:
-            momentum = initial_momentum
-        else:
-            momentum = final_momentum
-        gains = (gains + 0.2) * ((dy > 0) != (iy > 0)) + (gains * 0.8) * ((dy > 0) == (iy > 0))
-        gains[gains < min_gain] = min_gain
-
-        iy = momentum * iy - eta * (gains * dy)
-        y = y + iy
-        y = y - np.tile(np.mean(y, 0), (n, 1))
-
-        # Compute current value of cost function
-
-        if (iter + 1) % 100 == 0:
-            if iter > 100:
-                loss = np.sum(h_prob * np.log(h_prob / l_prob))
-            else:
-                loss = np.sum(h_prob / 4 * np.log(h_prob / 4 / l_prob))
-            print("Iteration ", (iter + 1), ": error is ", loss)
-
-        # Stop lying about P-values
-
-        if iter == 100:
-            h_prob = h_prob / 4
-    print("finished training!")
+    ce_array = []
+    for i in range(max_iter):
+        y_dist = np.reshape(euclidean_distances(y, y), -1)
+        psi_value = np.array(ld_psi_function(y_dist, min_dist))
+        print(3)
+        a, b = fit_curves(y_dist, psi_value)
+        print(a, b)
+        y = y - learning_rate * ce_gradient(h_prob, y, a, b)
+        ce_current = np.sum(ce(h_prob, y, a, b)) / 1e+5
+        ce_array.append(ce_current)
+        print(i)
+        if i % 10 == 0:
+            plt.figure(figsize=(20, 15))
+            plt.scatter(y[:, 0], y[:, 1], c=labels.astype(int), cmap='tab10', s=50)
+            plt.title("UMAP dimensional reduction for 3motif with random min_dist={}, k={}".format(str(min_dist), str(k_neigh)),
+                      fontsize=20)
+            plt.xlabel("UMAP1", fontsize=20)
+            plt.ylabel("UMAP2", fontsize=20)
+            plt.savefig(path + '/UMAP_iter' + str(i) + '.png')
+            plt.close()
+            print("Cross-Entropy = " + str(ce_current) + " after " + str(i) + " iterations")
+    plt.figure(figsize=(20,15))
+    plt.plot(ce_array)
+    plt.title('cross-entropy', fontsize=20)
+    plt.xlabel('ITERATION', fontsize=20)
+    plt.ylabel("CROSS-ENTROPY", fontsize=20)
+    plt.savefig(path + '/UMAP_iter' + '_Final' + '.png')
     return y
- 
- 
+
+
 if __name__ == "__main__":
     # Run Y = tsne.tsne(X, no_dims, perplexity) to perform t-SNE on your dataset.
     # X = np.loadtxt("mnist2500_X.txt")
     # labels = np.loadtxt("mnist2500_labels.txt")
+
     data, label1, label2 = sim.simulation_run_1()
     X = data.numpy()
-    Y = tsne(X, label1, 1 / 2, 1.987, 0.98, k_neigh=2, alpha=3.0)
-    fig, ax = plt.subplots()
-    title_str = 'Tsne dimensional reduction for 3motif with random{}' \
-        .format('k_neigh=10')
-    sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
-    ax.legend(*sc.legend_elements(), title="clusters")
-    plt.show()
+    label = label2.numpy()
+    para_min_dist = np.linspace(0.1, 0.99, 10)
+    para_k = np.linspace(1, 15, 15).astype(int)
+    umap(X, label, 0.01, 8)
 
 
-
-
-    '''
-    alpha_set = np.linspace(1, 2.5, 50)
-    for alpha_i in alpha_set:
-        Y = tsne(X, label1, 1 / 2, 1.987, 0.98, k_neigh = alpha_i)
-        fig, ax = plt.subplots()
-        title_str = 'Tsne dimensional reduction for 3motif with random(weight-loss) alpha={}' \
-            .format(str(k_i))
-        sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
-        ax.legend(*sc.legend_elements(), title="clusters")
-        plt.title(title_str)
-        plt.savefig("./figure/figure_loss_alpha={}.png".format(str(k_i)))
-
-
-    k = np.linspace(1, 2.5, 50)
-    for k_i in k:
-        Y = tsne(X, label1, 1 / 2, 1, 1, k_i)
-        fig, ax = plt.subplots()
-        title_str = 'Tsne dimensional reduction for 3motif with random(weight-loss) alpha={}' \
-            .format(str(k_i))
-        sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
-        ax.legend(*sc.legend_elements(), title="clusters")
-        plt.title(title_str)
-        plt.savefig("./figure/figure_loss_alpha={}.png".format(str(k_i)))  
-    k = 10
-    Y = tsne(X, label1, 1 / 2, 1.987, 0.98, k)
-    fig, ax = plt.subplots()
-    sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
-    ax.legend(*sc.legend_elements(), title="clusters")
-    title_str = 'Tsne dimensional reduction for 3motif with random(weight'
-    plt.title(title_str)
-    plt.show()
-    k = 10
-    a_values = np.linspace(1.1, 2, 10)
-    b_values = np.linspace(0.1, 1, 10)
-    for index_a in a_values:
-        for index_b in b_values:
-            Y = tsne(X, label1, 1/2, 1, 1, k)
-            fig, ax = plt.subplots()
-            title_str = 'Tsne dimensional reduction for 3motif with random(different-t a={},b={}' \
-                .format(str(index_a), str(index_b))
-            sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
-            ax.legend(*sc.legend_elements(), title="clusters")
-            plt.title(title_str)
-            plt.savefig("./figure/figure_a={},b={}.png".format(str(index_a), str(index_b)))
-
-    #plt.savefig("./figure/figure_sample_k={}.png".format(str(k)))
-    # Y = pca(X, 2).real
-    # fun = MDS(2)
-    # Y = fun.fit_transform(X)
-
-    a_values = np.linspace(1, 2, 5)
-    b_values = np.linspace(0.1, 1, 5)
-    for index_a in a_values:
-        for index_b in b_values:
-            Y = tsne(X, label1, 1/2, index_a, index_b)
-            fig, ax = plt.subplots()
-            title_str = 'Tsne dimensional reduction for 3motif with random(different-t a={},b={}' \
-                .format(str(index_a), str(index_b))
-            sc = ax.scatter(Y[:, 0], Y[:, 1], c=label2, cmap='tab10')
-            ax.legend(*sc.legend_elements(), title="clusters")
-            plt.title(title_str)
-            plt.savefig("./figure/figure_a={},b={}.png".format(str(index_a), str(index_b)))
-    '''
